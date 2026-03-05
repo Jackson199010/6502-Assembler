@@ -30,5 +30,3 @@ NOADD:
 
   dex
   bne MULT
-
-.endproc
