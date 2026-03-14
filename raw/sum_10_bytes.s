@@ -13,7 +13,7 @@ lda #$00
 sta $02
 sta $03
 
-; Prepare some data in the table. The sum must be $0268
+; Prepare some data in the table. The sum must be $268
 lda #$55
 sta $0200
 sta $0201
@@ -40,8 +40,8 @@ LOOP:
   clc
   adc $02
   sta $02
-  lda #0
-  adc $03
-  sta $03
+  bcc NO_CARRY
+  inc $03
+NO_CARRY:
   dey
   bpl LOOP
