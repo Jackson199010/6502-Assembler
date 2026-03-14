@@ -13,7 +13,7 @@ lda #$00
 sta $02
 sta $03
 
-; Prepare some data in the table. The sum must be $268
+; Prepare some data in the table. The sum must be $0268
 lda #$55
 sta $0200
 sta $0201
