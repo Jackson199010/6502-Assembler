@@ -2,7 +2,7 @@
 ; The goal is to reverse order of the first 10 bytes and store them starting at $0300
 ; (Assuming that the table is zeroed out) 
 
-; Prepare some data in the table. The sum must be $268
+; Prepare some data in the table
 lda #$55
 sta $0200
 sta $0201
