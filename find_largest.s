@@ -4,7 +4,7 @@
 
 
 ; Prepare some data in the table.
-lda #$ff
+lda #$ee
 sta $0200
 lda #$3f
 sta $0205
@@ -14,16 +14,15 @@ sta $02ab
 lda #$fa
 sta $02ef
 
-lda #$00
-sta $00
-
+lda #0
 ldy #0
 
 LOOP:
+  cmp $0200, y
+  bcs SKIP_SAVE_NEW_BIG
   lda $0200, y
-  cmp $00
-  bcc SKIP_SAVE_NEW_BIG
-  sta $00
 SKIP_SAVE_NEW_BIG:
   iny
   bne LOOP
+
+sta $00
