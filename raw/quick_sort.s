@@ -1,21 +1,32 @@
 ; Quick sort algorithm implementation
-; A table of 6 elemetns to sort - $0200 - 0205
+; A table of 8 elemetns to sort - $0200 - 0207
 ; Table address is at the $00-$01
-; $02 - $09 is reserved for variables
+
+; $02 - $07 is reserved for variables
+; LO_IND = $02 - Lo index
+; HI_IND = $03 - Hi index
+; PIVOT = $04 - The pivot value
+; SWAP_IND = $05 - The swap index
+; TMP5 = $06 - Tmp var1
+; TMP6 = $07 - Tmp var2
 
 ; Fill in elements in the table 
-lda #$0a
+lda #$0f
 sta $0200
-lda #$07
-sta $0201
-lda #$08
-sta $0202
-lda #$09
-sta $0203
 lda #$01
+sta $0201
+lda #$04
+sta $0202
+lda #$be
+sta $0203
+lda #$12
 sta $0204
-lda #$05
+lda #$bb
 sta $0205
+lda #$1f
+sta $0206
+lda #$22
+sta $0207
 
 ; Zero page artifacts fill
 lda #$00
@@ -23,17 +34,10 @@ sta $00
 lda #$02
 sta $01
 
-; LO_IND = $02 - Lo index
-; HI_IND = $03 - Hi index
-; PIVOT = $04 - The pivot value
-; SWAP_IND = $05 - The swap index
-; TMP5 = $06 - Tmp var1
-; TMP6 = $07 - Tmp var2
-; 
 
 lda #$00 ; Lo index of array to sort
 sta $02  ; Store low index at LO_IND 
-lda #$05 ; Hi index
+lda #$07 ; Hi index
 sta $03  ; Store hi index at HI_IND 
 
 jsr QUICK_SORT
@@ -59,8 +63,9 @@ QUICK_SORT:
   sta $03
   dec $03
   jsr QUICK_SORT
-
-  pla ; Restore SWAP_IND from the stack and set it to the LO_IND
+  
+  ; Restore SWAP_IND from the stack and set it to the LO_IND
+  pla 
   sta $02
   inc $02
 
@@ -75,19 +80,19 @@ rts
 
 ; Swap the values that stored by the index in Y registry and the SWAP_IND - $05
 SWAP:
-  sty $06 ; Save Y registry in the TMP1 var
+  sty $06 
  
   lda ($00), y
-  sta $07 ; Store index1 value in the TMP2 var
+  sta $07 
   
-  ldy $05 ; Load the index2 into the Y
-  lda ($00), y ; Load the index2 value into A
-  ldy $06 ; Restore the index1 into Y
-  sta ($00), y  ; Save the value by index2 into the location by index1 
+  ldy $05 
+  lda ($00), y
+  ldy $06 ;
+  sta ($00), y
 
-  ldy $05 ; Load the index2 into the Y
-  lda $07 ; Load the value by index1
-  sta ($00), y ; Save the value by index1 into the location by index2
+  ldy $05
+  lda $07 
+  sta ($00), y
 
   ldy $06 ; Restore the original value of the Y registry
   
