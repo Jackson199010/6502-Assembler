@@ -40,13 +40,7 @@ jsr QUICK_SORT
 jmp END
 
 QUICK_SORT:
-  ; Store the lo and lo indicies in the stack to restore it at the end of the procedure,
-  ; so the original indicies could be passed to the next QUICK_SORT proc. recursive call
-  lda $02 ; Push LO_IND
-  pha
-  lda $03 ; Push HI_IND
-  pha
-
+  lda $03
   cmp $02 ; Compare HI_IND with the LO_IND
   beq QSORT_END
   bcc QSORT_END
@@ -54,8 +48,11 @@ QUICK_SORT:
   ; Ater the Lomuto partition is done the SWAP_IND will be available at the $05
   jsr LOMUTO_PARTITION
 
-  ; Recursivelly do the Sorthing according to the SWAP_IND
-  ; Push SWAP_IND into the stack
+  ; Push the HI_IND in the stack to pop it on the right partition sorting
+  lda $03 
+  pha
+
+  ; Push SWAP_IND into the stack to use it as a LO_IND on the right partition sorting
   lda $05
   pha
 
@@ -63,17 +60,17 @@ QUICK_SORT:
   dec $03
   jsr QUICK_SORT
 
-  pla ; Restore SWAP_IND from the stack
+  pla ; Restore SWAP_IND from the stack and set it to the LO_IND
   sta $02
   inc $02
+
+  ; Restore HI_IND from the stack
+  pla
+  sta $03
+
   jsr QUICK_SORT
 
   QSORT_END:
-    ; Restore HI_IND and LO_IND to theirs original values
-    pla
-    sta $03
-    pla
-    sta $02
 rts
 
 ; Swap the values that stored by the index in Y registry and the SWAP_IND - $05
