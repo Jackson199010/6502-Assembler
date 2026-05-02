@@ -35,7 +35,6 @@ sta $00
 lda #$02
 sta $01
 
-
 lda #$00 ; Lo index of array to sort
 sta $02  ; Store low index at LO_IND 
 lda #$07 ; Hi index
@@ -43,7 +42,6 @@ sta $03  ; Store hi index at HI_IND
 
 jsr QUICK_SORT
 jmp END
-
 
 QUICK_SORT:
   lda $03
