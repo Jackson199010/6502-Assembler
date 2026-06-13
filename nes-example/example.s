@@ -241,7 +241,7 @@ ldx #$0
 stx nmi_ready
 
 ; Restore the registers and return from the interrupt
-ppu_update_end
+ppu_update_end:
 pla
 tay
 pla
