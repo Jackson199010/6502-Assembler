@@ -72,23 +72,23 @@ The file begins with named constants for hardware-mapped I/O addresses. These
 are not variables — they are fixed addresses burned into the NES hardware.
 
   PPU registers ($2000-$2007):
-    PPU_CONTROL      $2000  PPU configuration (NMI enable, pattern tables, etc.)
-    PPU_MASK         $2001  Rendering enable (background, sprites, greyscale)
-    PPU_STATUS       $2002  PPU state flags (bit 7 = vblank flag)
-    PPU_SPRAM_ADDRESS $2003 OAM write address
-    PPU_SPRAM_IO     $2004  OAM data port
-    PPU_VRAM_ADDRESS1 $2005 Scroll position
-    PPU_VRAM_ADDRESS2 $2006 VRAM address (two writes = 16-bit address)
-    PPU_VRAM_IO      $2007  VRAM data port (auto-increments address)
+    PPU_CONTROL       $2000  PPU configuration (NMI enable, pattern tables, etc.)
+    PPU_MASK          $2001  Rendering enable (background, sprites, greyscale)
+    PPU_STATUS        $2002  PPU state flags (bit 7 = vblank flag)
+    PPU_SPRAM_ADDRESS $2003  OAM write address
+    PPU_SPRAM_IO      $2004  OAM data port
+    PPU_VRAM_ADDRESS1 $2005  Scroll position
+    PPU_VRAM_ADDRESS2 $2006  VRAM address (two writes = 16-bit address)
+    PPU_VRAM_IO       $2007  VRAM data port (auto-increments address)
 
   APU registers:
-    APU_DM_CONTROL   $4010  DMC audio channel control
-    APU_CLOCK        $4015  APU channel enable
+    APU_DM_CONTROL    $4010  DMC audio channel control
+    APU_CLOCK         $4015  APU channel enable
 
   Joystick / dual-purpose:
-    JOYPAD1          $4016  Read: controller 1 state
-    JOYPAD2          $4017  Read: controller 2 / Write: APU frame counter
-    SPRITE_DMA       $4014  Write page number to trigger OAM DMA transfer
+    JOYPAD1           $4016  Read: controller 1 state
+    JOYPAD2           $4017  Read: controller 2 / Write: APU frame counter
+    SPRITE_DMA        $4014  Write page number to trigger OAM DMA transfer
 
   Gamepad button bitmasks (used to test individual bits of the gamepad byte):
     PAD_A=$01  PAD_B=$02  PAD_SELECT=$04  PAD_START=$08
@@ -136,8 +136,8 @@ instead of 2, making every access 1 byte smaller and 1 cycle faster.
 
   nmi_ready  1 byte  NMI command flag: 0=idle, 1=push frame, 2=disable render
   gamepad    1 byte  Current state of all 8 controller buttons (one bit each)
-  d_x        1 byte  Ball X velocity
-  d_y        1 byte  Ball Y velocity
+  d_x        1 byte  Ball X velocity (signed: $01=right, $FF=left)
+  d_y        1 byte  Ball Y velocity (signed: $01=down,  $FF=up)
 
 .res 1 reserves 1 byte of RAM address space without writing anything to ROM.
 
@@ -217,31 +217,31 @@ The very first code executed on power-on or when the Reset button is pressed.
 Its job is to bring the hardware from an unknown state to a safe, known state.
 
   Step 1 — Silence the hardware:
-    sei               Disable IRQ interrupts
-    sta PPU_CONTROL   Disable NMI
-    sta PPU_MASK      Turn off rendering
+    sei                Disable IRQ interrupts
+    sta PPU_CONTROL    Disable NMI
+    sta PPU_MASK       Turn off rendering
     sta APU_DM_CONTROL Disable DMC audio IRQ
-    sta JOYPAD2       Disable APU frame counter IRQ ($4017 write)
+    sta JOYPAD2        Disable APU frame counter IRQ ($4017 write)
 
   Step 2 — CPU housekeeping:
-    cld               Disable decimal mode (not used on NES)
-    ldx #$ff / txs    Initialize stack pointer to $01FF (top of stack page)
+    cld                Disable decimal mode (not used on NES)
+    ldx #$ff / txs     Initialize stack pointer to $01FF (top of stack page)
 
   Step 3 — Wait for PPU warmup (vblank #1):
-    bit PPU_STATUS    Clear stale vblank flag from power-on garbage
-    wait_vblank loop  Spin until PPU sets bit 7 of PPU_STATUS
+    bit PPU_STATUS     Clear stale vblank flag from power-on garbage
+    wait_vblank loop   Spin until PPU sets bit 7 of PPU_STATUS
 
   Step 4 — Initialize memory:
-    clear_ram         Zero all 8 pages of RAM ($0000-$07FF)
-    clear_oam         Set all sprite Y positions to $FF (offscreen)
+    clear_ram          Zero all 8 pages of RAM ($0000-$07FF)
+    clear_oam          Set all sprite Y positions to $FF (offscreen)
 
   Step 5 — Wait for PPU fully ready (vblank #2):
-    wait_vblank2 loop Spin until second vblank — PPU is now fully stable
+    wait_vblank2 loop  Spin until second vblank — PPU is now fully stable
 
   Step 6 — Enable NMI and start game:
-    lda #%10001000    Bit 7=NMI enable, Bit 3=background tiles at $1000
+    lda #%10001000     Bit 7=NMI enable, Bit 3=sprite pattern table at $1000
     sta PPU_CONTROL
-    jmp main          Jump to game loop, never returns
+    jmp main           Jump to game loop, never returns
 
 The two vblank waits are required because the PPU hardware takes approximately
 2 full frames (~60ms) to stabilize after power-on.
@@ -322,6 +322,83 @@ They communicate safely through the nmi_ready zero page variable:
     1  Game loop requests a PPU frame update
     2  Game loop requests rendering to be turned off
 
+--------------------------------------------------------------------------------
+  UTILITY FUNCTIONS
+--------------------------------------------------------------------------------
+
+ppu_update:
+  Sets nmi_ready = 1 and busy-waits until the NMI handler clears it back to 0.
+  Use this when the game loop has finished writing to OAM/palette and wants to
+  commit those changes to the screen on the next vblank. Returns after the NMI
+  handler has completed the PPU transfer.
+
+ppu_off:
+  Sets nmi_ready = 2 and busy-waits until the NMI handler clears it back to 0.
+  Use this before writing directly to PPU VRAM (e.g. name table updates), since
+  VRAM can only be safely written when rendering is off. The NMI handler disables
+  rendering by writing $00 to PPU_MASK before clearing the flag.
+
+clear_nametable:
+  Clears the first name table at PPU address $2000.
+    - Resets the PPU address latch by reading PPU_STATUS.
+    - Writes the address $2000 as two bytes to PPU_VRAM_ADDRESS2.
+    - Writes $00 to PPU_VRAM_IO for 30 rows × 32 columns = 960 tile slots.
+    - Writes $00 for an additional 64 bytes to clear the attribute table.
+  After this call the screen shows only the background color.
+
+gamepad_poll:
+  Reads the current button state of controller 1 into the gamepad zero page var.
+  The NES controller interface works as a shift register:
+    1. Strobe JOYPAD1 high then low to latch the current button state.
+    2. Read JOYPAD1 eight times — each read shifts out one button bit (bit 0).
+    3. Bit 0 of each read is 1 if pressed, 0 if not.
+  The loop reads 8 bits and rotates each into the carry, then into the gamepad
+  byte via ROR. The final order matches the PAD_* bitmask constants:
+    A, B, Select, Start, Up, Down, Left, Right (LSB to MSB).
+  Note: DPCM audio samples share the same bus and can corrupt reads.
+
+--------------------------------------------------------------------------------
+  MAIN PROC AND GAME LOOP (.proc main)
+--------------------------------------------------------------------------------
+
+main is called once from reset and never returns. It runs with rendering off.
+
+  Initialization:
+    1. Copy default_palette (32 bytes) into the palette RAM buffer.
+    2. Call clear_nametable to blank the screen.
+    3. Set PPU address to $208A (row 4, col 10 in the first name table:
+       $2000 + 32*4 + 10 = $208A) and write the welcome_text bytes directly
+       to PPU_VRAM_IO. The loop ends when it encounters the $00 terminator.
+    4. Set up sprite 0 (bat): Y=180, X=120, tile=1, attributes=0.
+    5. Set up sprite 1 (ball): Y=124, X=124, tile=2, attributes=0.
+    6. Set d_x=1, d_y=1 (ball moves right and down at 1 pixel per frame).
+    7. Call ppu_update to commit the initial state and turn rendering on.
+
+  Game loop (mainloop):
+    The loop runs once per frame, gated by the NMI handler:
+
+    Wait for frame start:
+      Spin while nmi_ready != 0. This ensures the previous NMI transfer is
+      complete before modifying OAM for the next frame.
+
+    Read gamepad:
+      Call gamepad_poll to refresh the gamepad variable.
+
+    Move bat (sprite 0) horizontally:
+      If PAD_L is set and X > 0:   subtract 1 from oam+3 (sprite 0 X).
+      If PAD_R is set and X < 248: add 1 to oam+3 (sprite 0 X).
+      The bounds checks (0 and 248) keep the bat within the visible screen.
+
+    Move ball (sprite 1):
+      Y axis: add d_y to oam+(1*4)+0. If Y reaches 0, set d_y=1 (bounce down).
+              If Y reaches 210, set d_y=$FF (bounce up, $FF = -1 in unsigned).
+      X axis: add d_x to oam+(1*4)+3. If X reaches 0, set d_x=1 (bounce right).
+              If X reaches 248, set d_x=$FF (bounce left).
+
+    Request frame:
+      Set nmi_ready = 1 and jump back to mainloop. The NMI handler will pick
+      up the updated OAM next vblank and render it to the screen.
+
 ================================================================================
   OVERALL BOOT SEQUENCE
 ================================================================================
@@ -336,8 +413,15 @@ They communicate safely through the nmi_ready zero page variable:
       ↓
   Wait vblank #2 (PPU fully ready)
       ↓
-  Enable NMI → jmp main (game loop begins)
+  Enable NMI → jmp main
       ↓
+  main: load palette, clear nametable, draw text, place sprites, set velocities
+      ↓
+  ppu_update: wait for NMI to commit initial frame, rendering turns on
+      ↓
+  mainloop: wait for NMI → poll gamepad → move bat → move ball → request frame
+      ↓  ↑_______________________________________________________________|
   Every vblank (60fps): NMI fires
       ↓
-  Save registers → check nmi_ready → DMA sprites → upload palette → enable rendering → restore registers → rti
+  Save registers → check nmi_ready → DMA sprites → upload palette
+      → enable rendering → clear nmi_ready → restore registers → rti
