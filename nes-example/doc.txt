@@ -1,0 +1,343 @@
+================================================================================
+  NES EXAMPLE PROJECT - DOCUMENTATION
+================================================================================
+
+This project is a minimal NES ROM built with the cc65 toolchain (ca65 assembler
++ ld65 linker). It consists of two source files:
+
+  example.cfg  - linker configuration (memory layout)
+  example.s    - assembly source code
+
+================================================================================
+  PART 1: LINKER CONFIGURATION (example.cfg)
+================================================================================
+
+The .cfg file is a custom DSL understood only by the ld65 linker. It tells the
+linker where memory regions exist and how to arrange the output .nes binary.
+
+--------------------------------------------------------------------------------
+  MEMORY BLOCK
+--------------------------------------------------------------------------------
+
+Defines physical memory regions — their start address, size, access type, and
+whether they appear in the output file.
+
+  ZP    $0000-$00FF  256 B   rw   Zero Page RAM. Not in ROM file.
+  OAM   $0200-$02FF  256 B   rw   Sprite buffer RAM. Not in ROM file.
+  RAM   $0300-$07FF  1.25KB  rw   General purpose RAM. Not in ROM file.
+  HDR   $0000        16 B    ro   iNES file header. Written to ROM file.
+  PRG   $8000-$FFFF  32 KB   ro   Program ROM. Written to ROM file.
+  CHR   $0000-$1FFF  8 KB    ro   Graphics ROM (PPU). Written to ROM file.
+
+RAM regions have file = "" — they are not stored in the .nes file because RAM
+is a physical chip that only exists at runtime. It powers on with garbage.
+
+ROM regions have file = "%O" and fill = yes — they are written into the binary
+and padded with $00 to their full declared size.
+
+The final .nes binary layout is: [ HDR (16b) ][ PRG (32KB) ][ CHR (8KB) ]
+
+--------------------------------------------------------------------------------
+  SEGMENTS BLOCK
+--------------------------------------------------------------------------------
+
+Maps named code/data sections into the memory regions above. In assembly source
+files you switch between segments with: .segment "NAME"
+
+  ZEROPAGE  → ZP    type=zp   Fast RAM variables (zero page addressing)
+  OAM       → OAM   type=bss  Sprite buffer (256 bytes, 64 sprites × 4 bytes)
+  BSS       → RAM   type=bss  General RAM variables (uninitialized)
+  HEADER    → HDR   type=ro   iNES file header bytes
+  CODE      → PRG   type=ro   Executable instructions, starts at $8000
+  RODATA    → PRG   type=ro   Read-only data (tables, strings), after CODE
+  VECTORS   → PRG   type=ro   NMI/Reset/IRQ vector table, pinned at $FFFA
+  TILES     → CHR   type=ro   Graphics tile data for the PPU
+
+type=bss segments only reserve address space — nothing is written to the ROM.
+type=zp is a special variant of bss that enables zero-page addressing.
+
+The VECTORS segment is forced to $FFFA because the 6502 CPU always reads the
+NMI, Reset, and IRQ handler addresses from exactly $FFFA-$FFFF on startup and
+interrupt. These three 2-byte addresses are hardwired into the CPU silicon.
+
+================================================================================
+  PART 2: ASSEMBLY SOURCE (example.s)
+================================================================================
+
+--------------------------------------------------------------------------------
+  CONSTANTS
+--------------------------------------------------------------------------------
+
+The file begins with named constants for hardware-mapped I/O addresses. These
+are not variables — they are fixed addresses burned into the NES hardware.
+
+  PPU registers ($2000-$2007):
+    PPU_CONTROL      $2000  PPU configuration (NMI enable, pattern tables, etc.)
+    PPU_MASK         $2001  Rendering enable (background, sprites, greyscale)
+    PPU_STATUS       $2002  PPU state flags (bit 7 = vblank flag)
+    PPU_SPRAM_ADDRESS $2003 OAM write address
+    PPU_SPRAM_IO     $2004  OAM data port
+    PPU_VRAM_ADDRESS1 $2005 Scroll position
+    PPU_VRAM_ADDRESS2 $2006 VRAM address (two writes = 16-bit address)
+    PPU_VRAM_IO      $2007  VRAM data port (auto-increments address)
+
+  APU registers:
+    APU_DM_CONTROL   $4010  DMC audio channel control
+    APU_CLOCK        $4015  APU channel enable
+
+  Joystick / dual-purpose:
+    JOYPAD1          $4016  Read: controller 1 state
+    JOYPAD2          $4017  Read: controller 2 / Write: APU frame counter
+    SPRITE_DMA       $4014  Write page number to trigger OAM DMA transfer
+
+  Gamepad button bitmasks (used to test individual bits of the gamepad byte):
+    PAD_A=$01  PAD_B=$02  PAD_SELECT=$04  PAD_START=$08
+    PAD_U=$10  PAD_D=$20  PAD_L=$40       PAD_R=$80
+
+--------------------------------------------------------------------------------
+  HEADER SEGMENT
+--------------------------------------------------------------------------------
+
+The first 16 bytes of the .nes file. Emulators and hardware read this before
+executing any code to understand the ROM layout and mapper type.
+
+  Bytes 0-3:  "NES" + $1A  Magic identifier
+  Byte  4:    $02           Number of 16KB PRG banks (2 = 32KB total)
+  Byte  5:    $01           Number of 8KB CHR banks (1 = 8KB total)
+  Byte  6:    flags         Packed byte: mirroring | SRAM<<1 | (mapper & $f)<<4
+  Byte  7:    flags         High nibble of mapper number
+  Bytes 8-15: $00           Padding
+
+The flags byte is built with bitwise operations at assemble time:
+  INES_MIRROR = 0  (0=horizontal, 1=vertical mirroring)
+  INES_SRAM   = 0  (1=battery-backed RAM at $6000-$7FFF)
+  INES_MAPPER = 0  (mapper 0 = NROM, the simplest mapper)
+
+--------------------------------------------------------------------------------
+  VECTORS SEGMENT  (pinned at $FFFA)
+--------------------------------------------------------------------------------
+
+Six bytes defining the three CPU interrupt vectors:
+
+  $FFFA-$FFFB  .word nmi    NMI handler address  (fires every vblank)
+  $FFFC-$FFFD  .word reset  Reset handler address (fires on power-on / reset)
+  $FFFE-$FFFF  .word irq    IRQ handler address   (fires on interrupt request)
+
+.word writes a 16-bit little-endian address. The labels nmi, reset, irq are
+defined in the CODE segment — the vector table just stores their addresses.
+The CPU reads these addresses and jumps to them when the events occur.
+
+--------------------------------------------------------------------------------
+  ZEROPAGE SEGMENT
+--------------------------------------------------------------------------------
+
+Variables stored at $0000-$00FF. Zero page addressing uses only 1 address byte
+instead of 2, making every access 1 byte smaller and 1 cycle faster.
+
+  nmi_ready  1 byte  NMI command flag: 0=idle, 1=push frame, 2=disable render
+  gamepad    1 byte  Current state of all 8 controller buttons (one bit each)
+  d_x        1 byte  Ball X velocity
+  d_y        1 byte  Ball Y velocity
+
+.res 1 reserves 1 byte of RAM address space without writing anything to ROM.
+
+--------------------------------------------------------------------------------
+  OAM SEGMENT
+--------------------------------------------------------------------------------
+
+  oam: .res 256
+
+A 256-byte RAM buffer at $0200-$02FF that mirrors the PPU's internal sprite
+memory. Each sprite occupies 4 consecutive bytes:
+
+  Byte 0: Y position
+  Byte 1: Tile index
+  Byte 2: Attributes (palette, flip flags)
+  Byte 3: X position
+
+64 sprites × 4 bytes = 256 bytes total. Each frame, this buffer is copied to
+the PPU via DMA during vblank.
+
+--------------------------------------------------------------------------------
+  RODATA SEGMENT
+--------------------------------------------------------------------------------
+
+Read-only data placed in PRG ROM after CODE. Two tables are defined:
+
+  default_palette (32 bytes):
+    16 background color entries + 16 sprite color entries.
+    Each entry is an NES palette index ($00-$3F).
+    Organized as 4 groups of 4 colors each for backgrounds and sprites.
+
+  welcome_text (8 bytes):
+    ASCII bytes for "WELCOME" followed by a null terminator ($00).
+
+--------------------------------------------------------------------------------
+  TILES SEGMENT
+--------------------------------------------------------------------------------
+
+  .incbin "example.chr"
+
+Embeds the raw binary contents of example.chr directly into the CHR ROM region.
+This is the graphics data the PPU uses to draw background tiles and sprites.
+.incbin is an assembler directive that reads a binary file and emits its bytes
+at the current position.
+
+--------------------------------------------------------------------------------
+  BSS SEGMENT
+--------------------------------------------------------------------------------
+
+  palette: .res 32
+
+A 32-byte RAM buffer for the current palette. The game logic writes color values
+here, and the NMI handler uploads this buffer to the PPU each frame. RAM must
+be explicitly initialized in the reset handler because it contains garbage at
+power-on.
+
+================================================================================
+  PART 3: CODE SEGMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+  IRQ HANDLER
+--------------------------------------------------------------------------------
+
+  irq:
+    rti
+
+The simplest possible handler — immediately returns from interrupt. This project
+does not use any IRQ-generating hardware features, but the handler must exist so
+the CPU has a safe address to jump to if an IRQ fires unexpectedly.
+
+--------------------------------------------------------------------------------
+  RESET HANDLER (.proc reset)
+--------------------------------------------------------------------------------
+
+The very first code executed on power-on or when the Reset button is pressed.
+Its job is to bring the hardware from an unknown state to a safe, known state.
+
+  Step 1 — Silence the hardware:
+    sei               Disable IRQ interrupts
+    sta PPU_CONTROL   Disable NMI
+    sta PPU_MASK      Turn off rendering
+    sta APU_DM_CONTROL Disable DMC audio IRQ
+    sta JOYPAD2       Disable APU frame counter IRQ ($4017 write)
+
+  Step 2 — CPU housekeeping:
+    cld               Disable decimal mode (not used on NES)
+    ldx #$ff / txs    Initialize stack pointer to $01FF (top of stack page)
+
+  Step 3 — Wait for PPU warmup (vblank #1):
+    bit PPU_STATUS    Clear stale vblank flag from power-on garbage
+    wait_vblank loop  Spin until PPU sets bit 7 of PPU_STATUS
+
+  Step 4 — Initialize memory:
+    clear_ram         Zero all 8 pages of RAM ($0000-$07FF)
+    clear_oam         Set all sprite Y positions to $FF (offscreen)
+
+  Step 5 — Wait for PPU fully ready (vblank #2):
+    wait_vblank2 loop Spin until second vblank — PPU is now fully stable
+
+  Step 6 — Enable NMI and start game:
+    lda #%10001000    Bit 7=NMI enable, Bit 3=background tiles at $1000
+    sta PPU_CONTROL
+    jmp main          Jump to game loop, never returns
+
+The two vblank waits are required because the PPU hardware takes approximately
+2 full frames (~60ms) to stabilize after power-on.
+
+clear_ram writes $00 to every address in $0000-$07FF using indexed addressing,
+iterating X from 0 to 255 and writing to 8 pages simultaneously per iteration.
+
+clear_oam writes $FF to the Y byte of each of the 64 sprites in the OAM buffer.
+Y=$FF places sprites below the visible screen (240 lines), hiding them. Only
+every 4th byte is written since the other 3 bytes don't matter for hidden sprites.
+
+--------------------------------------------------------------------------------
+  NMI HANDLER (.proc nmi)
+--------------------------------------------------------------------------------
+
+Fires automatically 60 times per second at the start of each vertical blank.
+Vblank is the only safe window to update PPU memory (sprites, palette, VRAM).
+
+  Step 1 — Preserve CPU registers:
+    pha / txa+pha / tya+pha    Push A, X, Y onto the stack
+
+    This is critical — NMI interrupts whatever the CPU was doing. Without saving
+    registers, the interrupted code would find A/X/Y corrupted on return.
+
+  Step 2 — Check nmi_ready flag:
+    nmi_ready == 0  →  nothing to do, jump to ppu_update_end
+    nmi_ready == 2  →  disable rendering (PPU_MASK=$00), clear flag, exit
+    nmi_ready == 1  →  proceed to cont_render
+
+  Step 3 — Transfer sprite table via DMA (cont_render):
+    stx PPU_SPRAM_ADDRESS ($2003)  Set OAM write address to 0
+    lda #>oam / sta SPRITE_DMA     Write $02 to $4014, triggering DMA
+
+    DMA copies all 256 bytes from $0200-$02FF into PPU OAM in 513 CPU cycles.
+    The CPU is suspended during the transfer. This is far faster than a manual
+    loop which would take ~1500 cycles.
+
+  Step 4 — Upload palette to PPU:
+    sta PPU_CONTROL     Re-apply PPU configuration (%10001000)
+    lda PPU_STATUS      Reset PPU address latch (required before writing $2006)
+    lda #$3f / sta PPU_VRAM_ADDRESS2   High byte of VRAM address
+    stx PPU_VRAM_ADDRESS2              Low byte → full address = $3F00
+
+    $3F00 is the start of palette memory in PPU address space:
+      $3F00-$3F0F  16 background palette entries
+      $3F10-$3F1F  16 sprite palette entries
+
+    loop: copies 32 bytes from the palette RAM buffer to PPU_VRAM_IO ($2007).
+    The PPU auto-increments its internal address after each write.
+    bcc (Branch if Carry Clear) loops while X < 32 ($20).
+
+  Step 5 — Enable rendering and signal completion:
+    lda #%00011110 / sta PPU_MASK   Enable background + sprites
+      Bit 4=show sprites, Bit 3=show background,
+      Bit 2=sprites in left 8px, Bit 1=background in left 8px
+    stx nmi_ready                   Clear flag back to 0
+
+    Rendering is enabled last — only after sprites and palette are fully
+    uploaded — so the PPU always has complete data before it draws.
+
+  After ppu_update_end — Restore registers:
+    pla+tay / pla+tax / pla    Pop Y, X, A from stack
+    rti                        Return from interrupt, resume interrupted code
+
+--------------------------------------------------------------------------------
+  COMMUNICATION PATTERN: GAME LOOP ↔ NMI HANDLER
+--------------------------------------------------------------------------------
+
+The game loop and NMI handler run asynchronously — NMI fires at any moment.
+They communicate safely through the nmi_ready zero page variable:
+
+  Game loop sets nmi_ready = 1 when it has finished updating OAM and palette
+  NMI handler reads nmi_ready, pushes data to PPU, then resets it to 0
+  Game loop waits for nmi_ready == 0 before starting the next frame's updates
+
+  nmi_ready values:
+    0  NMI handler is idle / has finished this frame
+    1  Game loop requests a PPU frame update
+    2  Game loop requests rendering to be turned off
+
+================================================================================
+  OVERALL BOOT SEQUENCE
+================================================================================
+
+  Power on
+      ↓
+  reset: disable IRQ, silence PPU/APU, set up stack
+      ↓
+  Wait vblank #1 (PPU starting up)
+      ↓
+  Clear all RAM to $00, hide all sprites (Y=$FF)
+      ↓
+  Wait vblank #2 (PPU fully ready)
+      ↓
+  Enable NMI → jmp main (game loop begins)
+      ↓
+  Every vblank (60fps): NMI fires
+      ↓
+  Save registers → check nmi_ready → DMA sprites → upload palette → enable rendering → restore registers → rti
